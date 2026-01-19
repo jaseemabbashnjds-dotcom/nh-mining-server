@@ -1,75 +1,65 @@
 const express = require('express');
-const cors = require('cors');
-const bodyParser = require('body-parser');
 const { createClient } = require('@supabase/supabase-js');
+const cors = require('cors');
 require('dotenv').config();
 
 const app = express();
+const PORT = process.env.PORT || 3000;
+
+// --- 🛠️ YE LINE SABSE ZAROORI HAI (Iske bina 400 error aata hai) ---
+app.use(express.json()); 
 app.use(cors());
-app.use(bodyParser.json());
 
 // Supabase Connection
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_KEY;
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// 1. Home Route
+// 1. Home Route (Browser Check)
 app.get('/', (req, res) => {
   res.send('NH Mining Server is Running! 🚀');
 });
 
-// 2. Claim Mining Route
+// 2. Mining Route (App Request)
 app.post('/api/claim', async (req, res) => {
-  const { userId, amount } = req.body;
-
-  if (!userId || !amount) {
-    return res.status(400).json({ error: 'User ID aur Amount zaroori hai' });
-  }
-
   try {
-    // Check User
-    const { data: user, error: fetchError } = await supabase
-      .from('users')
-      .select('balance, total_notes')
-      .eq('user_id', userId)
-      .single();
+    console.log("📥 Incoming Request Body:", req.body); // Ye Logs mein dikhega
 
-    if (fetchError && fetchError.code !== 'PGRST116') throw fetchError;
+    const { userId, amount } = req.body;
 
-    let newBalance = amount;
-    let newNotes = 1;
-
-    if (user) {
-      newBalance = parseFloat(user.balance) + parseFloat(amount);
-      newNotes = user.total_notes + 1;
-      
-      // Update User
-      const { error: updateError } = await supabase
-        .from('users')
-        .update({ balance: newBalance, total_notes: newNotes })
-        .eq('user_id', userId);
-      if (updateError) throw updateError;
-    } else {
-      // Create New User
-      const { error: insertError } = await supabase
-        .from('users')
-        .insert([{ user_id: userId, balance: amount, total_notes: 1 }]);
-      if (insertError) throw insertError;
+    // Validation
+    if (!userId) {
+      console.log("❌ Error: UserId missing");
+      return res.status(400).json({ error: "User ID is required" });
     }
 
-    // Add to Inventory
-    await supabase.from('inventory').insert([
-      { user_id: userId, amount: amount, serial_no: '#NOTE' + Date.now() }
-    ]);
+    // Database Insert
+    const { data, error } = await supabase
+      .from('inventory')
+      .insert([
+        { 
+          user_id: userId, 
+          serial_no: `NH-${Date.now()}`, // Unique Serial
+          amount: amount || 1.0,
+          created_at: new Date()
+        }
+      ]);
 
-    res.json({ success: true, newBalance });
+    if (error) {
+      console.error("🔥 Supabase Error:", error);
+      return res.status(500).json({ error: error.message });
+    }
 
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.log("✅ Success! Note Minted for:", userId);
+    res.status(200).json({ message: "Mining Successful", data });
+
+  } catch (err) {
+    console.error("🔥 Server Error:", err);
+    res.status(500).json({ error: "Internal Server Error" });
   }
 });
 
-const PORT = process.env.PORT || 3000;
+// Server Start
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
