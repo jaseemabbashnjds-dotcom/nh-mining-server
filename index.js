@@ -15,64 +15,45 @@ const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_KEY;
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// 1. Home Route (Browser Check)
+// 1. Home Route
 app.get('/', (req, res) => {
-  res.send('NH Mining Server is Running! 🚀 (Mining + Wallet + Leaderboard Ready)');
+  res.send('NH Mining Server is Running! 🚀 (Monthly Leaderboard Active)');
 });
 
-// 2. Mining Route (App Mining Request)
+// 2. Mining Route (Ye data banata hai)
 app.post('/api/claim', async (req, res) => {
   try {
-    console.log("📥 Incoming Mining Request:", req.body);
     const { userId, amount } = req.body;
+    if (!userId) return res.status(400).json({ error: "User ID missing" });
 
-    // Validation
-    if (!userId) {
-      return res.status(400).json({ error: "User ID is required" });
-    }
-
-    // Database Insert
     const { data, error } = await supabase
       .from('inventory')
-      .insert([
-        { 
+      .insert([{ 
           user_id: userId, 
           serial_no: `NH-${Date.now()}`, 
           amount: amount || 1.0,
           created_at: new Date()
-        }
-      ]);
+        }]);
 
-    if (error) {
-      console.error("🔥 Supabase Error:", error);
-      return res.status(500).json({ error: error.message });
-    }
-
-    console.log("✅ Success! Note Minted for:", userId);
+    if (error) throw error;
     res.status(200).json({ message: "Mining Successful", data });
 
   } catch (err) {
-    console.error("🔥 Server Error:", err);
-    res.status(500).json({ error: "Internal Server Error" });
+    res.status(500).json({ error: err.message });
   }
 });
 
-// 3. WALLET ROUTE (My Notes)
+// 3. WALLET ROUTE (Ye kabhi reset nahi hoga - Lifetime Earning)
 app.get('/api/wallet/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
-    
-    // Sirf uss user ka data laao
     const { data, error } = await supabase
       .from('inventory')
       .select('*')
       .eq('user_id', userId)
       .order('created_at', { ascending: false });
 
-    if (error) {
-      return res.status(500).json({ error: error.message });
-    }
-
+    if (error) throw error;
     res.status(200).json(data);
 
   } catch (err) {
@@ -80,35 +61,38 @@ app.get('/api/wallet/:userId', async (req, res) => {
   }
 });
 
-// 4. 🏆 LEADERBOARD ROUTE (Top Miners)
+// 4. 🏆 LEADERBOARD ROUTE (Monthly Reset + Top 10)
 app.get('/api/leaderboard', async (req, res) => {
   try {
-    // Inventory se sirf user_id aur amount nikalo
+    // --- 🗓️ MONTHLY RESET LOGIC ---
+    const now = new Date();
+    // Iss mahine ki 1st tareekh nikalo (Example: Feb 1st 00:00:00)
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+
+    console.log(`🏆 Fetching Leaderboard data since: ${startOfMonth}`);
+
+    // Database se sirf wo data mango jo "Start of Month" ke baad bana hai
     const { data, error } = await supabase
       .from('inventory')
-      .select('user_id, amount');
+      .select('user_id, amount')
+      .gte('created_at', startOfMonth); // gte = Greater Than Equal (Isse naya)
 
-    if (error) {
-      return res.status(500).json({ error: error.message });
-    }
+    if (error) return res.status(500).json({ error: error.message });
 
-    // --- Calculation Logic (Server side) ---
-    // Hum data ko group karke count karenge ki kiske paas kitna hai
+    // --- Counting Logic ---
     const counts = {};
-    
     data.forEach(item => {
-      // Agar user pehle se list mein hai toh add karo, nahi toh new entry
       counts[item.user_id] = (counts[item.user_id] || 0) + item.amount;
     });
 
-    // Object ko Array mein convert karo aur Sort karo (Sabse zyada wala upar)
+    // --- Top 10 Sorting ---
     const leaderboard = Object.keys(counts)
       .map(userId => ({
         userId: userId,
         balance: counts[userId]
       }))
-      .sort((a, b) => b.balance - a.balance) // High to Low
-      .slice(0, 50); // Sirf Top 50 log dikhao
+      .sort((a, b) => b.balance - a.balance) // Sabse zyada wala upar
+      .slice(0, 10); // 🔥 SIRF TOP 10 DIKHAO
 
     res.status(200).json(leaderboard);
 
