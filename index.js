@@ -25,9 +25,8 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 // 1. HOME (Health Check)
 app.get('/', (req, res) => res.send('NH Mining Server: Live 🟢'));
 
-// 2. REGISTER / LOGIN (🔥 UPDATED WITH REFERRAL LOGIC 🔥)
+// 2. REGISTER / LOGIN (Referral Logic Included)
 app.post('/api/register', async (req, res) => {
-  // 👇 'referralCode' ko yahan receive kar rahe hain
   const { uid, email, username, phone, importedBalance, importedReferralCount, referralCode } = req.body;
 
   try {
@@ -39,16 +38,12 @@ app.post('/api/register', async (req, res) => {
       .single();
 
     if (existingUser) {
-      // Agar user purana hai, toh wahi username wapas bhej do (No Referral Check)
       return res.status(200).json({ success: true, message: existingUser.username });
     }
 
     // 🔥 REFERRAL LOGIC START 🔥
-    // Agar naye user ne code dala hai
     if (referralCode && referralCode.trim() !== "") {
       try {
-        // Dhoondo kisne invite kiya (Username = Referral Code)
-        // .ilike() use kiya taaki chhota/bada letter (Jaseem vs jaseem) dono chale
         const { data: referrer } = await supabase
           .from('users')
           .select('*')
@@ -56,7 +51,6 @@ app.post('/api/register', async (req, res) => {
           .single();
 
         if (referrer) {
-          // Agar banda mil gaya, to uska Referral Count +1 kar do
           const newCount = (referrer.referral_count || 0) + 1;
           
           await supabase
@@ -70,13 +64,11 @@ app.post('/api/register', async (req, res) => {
         }
       } catch (refErr) {
         console.error("Referral Error (Ignored):", refErr.message);
-        // Referral fail hone par bhi user register hona chahiye, isliye error ignore kiya
       }
     }
     // 🔥 REFERRAL LOGIC END 🔥
 
-
-    // 3. New User Insert (Ab Referral Count update hone ke baad naya user banega)
+    // 3. New User Insert
     const { error: insertError } = await supabase
       .from('users')
       .insert([{ 
@@ -84,9 +76,10 @@ app.post('/api/register', async (req, res) => {
         email: email, 
         username: username,
         phone: phone || null,  
-        balance: importedBalance || 1000, // Default 1000 Bonus
+        balance: importedBalance || 1000, 
         referral_count: importedReferralCount || 0,
-        today_taps: 0
+        today_taps: 0,
+        last_active_date: new Date().toISOString().split('T')[0] // Aaj ki date set karo
       }]);
 
     if (insertError) throw insertError;
@@ -118,7 +111,7 @@ app.post('/api/claim', async (req, res) => {
   }
 });
 
-// 4. MINING STATS
+// 4. MINING STATS (🔥 DAILY RESET LOGIC ADDED HERE 🔥)
 app.post('/api/mining-stats', async (req, res) => {
   const { uid } = req.body;
   try {
@@ -130,10 +123,34 @@ app.post('/api/mining-stats', async (req, res) => {
 
     if (error) throw error;
 
-    // 🔥 Daily Limit Logic: Base 5000 + (Referrals * 500)
+    // --- 📅 DAILY RESET CHECK START ---
+    // Aaj ki date nikalo (YYYY-MM-DD format me)
+    const todayDate = new Date().toISOString().split('T')[0]; 
+    
+    // Agar DB ki date purani hai, matlab naya din shuru ho gaya
+    if (user.last_active_date !== todayDate) {
+      console.log(`🌞 New Day for ${user.username}! Resetting taps.`);
+      
+      // DB me Taps 0 kar do aur Date update kar do
+      await supabase
+        .from('users')
+        .update({ today_taps: 0, last_active_date: todayDate })
+        .eq('uid', uid);
+
+      // Local variable bhi 0 kar do taaki user ko abhi turant 0 dikhe
+      user.today_taps = 0;
+    }
+    // --- 📅 DAILY RESET CHECK END ---
+
+    // --- ⚡ MAX LIMIT CALCULATION (Referral Limit Logic) ---
+    // Base Limit: 5000
+    // Referral Bonus: 500 per referral
     const baseLimit = 5000;
     const referralBonus = (user.referral_count || 0) * 500;
+    
+    // Agar 7 referrals hain: 5000 + (7*500) = 8500 Limit banegi
     const finalMaxTaps = baseLimit + referralBonus; 
+
 
     // Global Stats
     const { data: globalData } = await supabase.from('users').select('balance');
@@ -142,8 +159,8 @@ app.post('/api/mining-stats', async (req, res) => {
     res.status(200).json({
       success: true,
       totalNotes: user.balance,
-      currentTaps: user.today_taps,
-      maxTaps: finalMaxTaps,
+      currentTaps: user.today_taps, // Ye reset hoke 0 aayega agar naya din hai
+      maxTaps: finalMaxTaps,        // Ye 8500 hi rahega (Referral add hoke)
       streak: 1, 
       referralCount: user.referral_count,
       globalCirculation: globalCirculation
