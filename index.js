@@ -6,7 +6,7 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// --- 🛠️ CONFIGURATION ---
+// Config
 app.use(express.json()); 
 app.use(cors());
 
@@ -15,94 +15,136 @@ const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_KEY;
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// 1. Home Route
+// 1. HOME ROUTE
 app.get('/', (req, res) => {
-  res.send('NH Mining Server is Running! 🚀 (Monthly Leaderboard Active)');
+  res.send('NH Mining Server 2.0 is Running! (With 1000 Bonus System) 🚀');
 });
 
-// 2. Mining Route (Ye data banata hai)
-app.post('/api/claim', async (req, res) => {
+// 2. REGISTER / LOGIN ROUTE (Auto 1000 Bonus Logic)
+app.post('/api/register', async (req, res) => {
+  const { uid, email, username } = req.body;
+
   try {
-    const { userId, amount } = req.body;
-    if (!userId) return res.status(400).json({ error: "User ID missing" });
-
-    const { data, error } = await supabase
-      .from('inventory')
-      .insert([{ 
-          user_id: userId, 
-          serial_no: `NH-${Date.now()}`, 
-          amount: amount || 1.0,
-          created_at: new Date()
-        }]);
-
-    if (error) throw error;
-    res.status(200).json({ message: "Mining Successful", data });
-
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// 3. WALLET ROUTE (Ye kabhi reset nahi hoga - Lifetime Earning)
-app.get('/api/wallet/:userId', async (req, res) => {
-  try {
-    const { userId } = req.params;
-    const { data, error } = await supabase
-      .from('inventory')
+    // Check karo user pehle se hai kya?
+    const { data: existingUser, error: fetchError } = await supabase
+      .from('users')
       .select('*')
-      .eq('user_id', userId)
-      .order('created_at', { ascending: false });
+      .eq('uid', uid)
+      .single();
 
-    if (error) throw error;
-    res.status(200).json(data);
+    if (existingUser) {
+      // User purana hai -> Bas Success bhejo (Bonus mat do)
+      return res.status(200).json({ success: true, message: existingUser.username });
+    }
+
+    // User naya hai -> Create karo + 1000 Bonus do
+    const { data: newUser, error: insertError } = await supabase
+      .from('users')
+      .insert([{ 
+        uid: uid, 
+        email: email, 
+        username: username,
+        balance: 1000, // 🎁 1000 BONUS
+        today_taps: 0
+      }]);
+
+    if (insertError) throw insertError;
+
+    res.status(200).json({ success: true, message: username });
 
   } catch (err) {
-    res.status(500).json({ error: "Server Error" });
+    res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// 4. 🏆 LEADERBOARD ROUTE (Monthly Reset + Top 10)
-app.get('/api/leaderboard', async (req, res) => {
+// 3. MINING ROUTE (Ab ye sirf +1 karega)
+app.post('/api/claim', async (req, res) => {
+  const { userId, amount } = req.body; // userId yahan UID hai
+  
   try {
-    // --- 🗓️ MONTHLY RESET LOGIC ---
-    const now = new Date();
-    // Iss mahine ki 1st tareekh nikalo (Example: Feb 1st 00:00:00)
-    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+    // Database me balance badhao (RPC function ki zaroorat nahi, simple update)
+    // Pehle current balance nikalo
+    const { data: user, error: fetchError } = await supabase
+      .from('users')
+      .select('balance')
+      .eq('uid', userId)
+      .single();
+      
+    if (fetchError) throw fetchError;
 
-    console.log(`🏆 Fetching Leaderboard data since: ${startOfMonth}`);
+    const newBalance = (user.balance || 0) + (amount || 1);
 
-    // Database se sirf wo data mango jo "Start of Month" ke baad bana hai
-    const { data, error } = await supabase
-      .from('inventory')
-      .select('user_id, amount')
-      .gte('created_at', startOfMonth); // gte = Greater Than Equal (Isse naya)
+    const { error: updateError } = await supabase
+      .from('users')
+      .update({ balance: newBalance })
+      .eq('uid', userId);
 
-    if (error) return res.status(500).json({ error: error.message });
+    if (updateError) throw updateError;
 
-    // --- Counting Logic ---
-    const counts = {};
-    data.forEach(item => {
-      counts[item.user_id] = (counts[item.user_id] || 0) + item.amount;
+    res.status(200).json({ success: true, message: "Mined" });
+
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 4. MINING STATS (App khulte waqt data lene ke liye)
+app.post('/api/mining-stats', async (req, res) => {
+  const { uid } = req.body;
+  try {
+    // 1. User ka data lao
+    const { data: user, error } = await supabase
+      .from('users')
+      .select('*')
+      .eq('uid', uid)
+      .single();
+
+    if (error) throw error;
+
+    // 2. Global Circulation nikalo (Sabka total)
+    // Note: Iske liye hum ek RPC function use kar sakte hain, par abhi simple query chalayenge
+    const { data: globalData, error: globalError } = await supabase
+      .from('users')
+      .select('balance');
+    
+    // Javascript me total jod lo (Agar users kam hain to ye theek hai)
+    // Users badhne par hum SQL function banayenge.
+    let globalCirculation = 0;
+    if (globalData) {
+      globalCirculation = globalData.reduce((acc, curr) => acc + (curr.balance || 0), 0);
+    }
+
+    res.status(200).json({
+      success: true,
+      totalNotes: user.balance,
+      currentTaps: user.today_taps,
+      maxTaps: 5000, // Hardcoded for now
+      streak: 1, // Logic baad me daalenge
+      referralCount: 0,
+      globalCirculation: globalCirculation
     });
 
-    // --- Top 10 Sorting ---
-    const leaderboard = Object.keys(counts)
-      .map(userId => ({
-        userId: userId,
-        balance: counts[userId]
-      }))
-      .sort((a, b) => b.balance - a.balance) // Sabse zyada wala upar
-      .slice(0, 10); // 🔥 SIRF TOP 10 DIKHAO
-
-    res.status(200).json(leaderboard);
-
   } catch (err) {
-    console.error("🔥 Leaderboard Error:", err);
-    res.status(500).json({ error: "Internal Server Error" });
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// Server Start
+// 5. SYNC TAPS (App band hone par taps save karna)
+app.post('/api/sync-taps', async (req, res) => {
+  const { uid, taps } = req.body;
+  try {
+    const { error } = await supabase
+      .from('users')
+      .update({ today_taps: taps })
+      .eq('uid', uid);
+
+    if (error) throw error;
+    res.status(200).json({ success: true });
+  } catch (err) {
+    res.status(500).json({ success: false });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
