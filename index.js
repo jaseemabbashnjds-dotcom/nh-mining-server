@@ -4,7 +4,9 @@ const cors = require('cors');
 require('dotenv').config();
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+
+// ✅ RAILWAY FIX 1: Port 8080 aur Railway ka dynamic port handle karna
+const PORT = process.env.PORT || 8080;
 
 app.use(express.json()); 
 app.use(cors());
@@ -12,9 +14,15 @@ app.use(cors());
 // Supabase Connection
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_KEY;
+
+// Safety Check: Agar variables nahi mile to crash hone se pehle bata dega
+if (!supabaseUrl || !supabaseKey) {
+    console.error("🚨 ERROR: SUPABASE_URL ya SUPABASE_KEY missing hai! Railway Variables check karo.");
+}
+
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// 1. HOME
+// 1. HOME (Health Check)
 app.get('/', (req, res) => res.send('NH Mining Server: Live 🟢'));
 
 // 2. REGISTER / LOGIN (With Migration Logic)
@@ -52,6 +60,7 @@ app.post('/api/register', async (req, res) => {
     res.status(200).json({ success: true, message: username });
 
   } catch (err) {
+    console.error("Register Error:", err.message);
     res.status(500).json({ success: false, message: err.message });
   }
 });
@@ -103,6 +112,7 @@ app.post('/api/mining-stats', async (req, res) => {
     });
 
   } catch (err) {
+    console.error("Stats Error:", err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -118,4 +128,7 @@ app.post('/api/sync-taps', async (req, res) => {
   }
 });
 
-app.listen(PORT, () => console.log(`Server running on ${PORT}`));
+// ✅ RAILWAY FIX 2: '0.0.0.0' address zaroori hai
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`Server running on port ${PORT}`);
+});
