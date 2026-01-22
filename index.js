@@ -34,12 +34,18 @@ const getTodayDateIST = () => {
 // 2. HOME
 app.get('/', (req, res) => res.send('NH Mining Server: Live & IST Synced 🇮🇳'));
 
-// 3. REGISTER / LOGIN
+// 3. REGISTER / LOGIN (✅ CRASH FIXED HERE)
 app.post('/api/register', async (req, res) => {
   const { uid, email, username, phone, importedBalance, importedReferralCount, referralCode } = req.body;
 
   try {
-    const { data: existingUser } = await supabase.from('users').select('*').eq('uid', uid).single();
+    // 🛑 CHANGE: .single() ki jagah .maybeSingle() use kiya
+    // Taaki agar user na mile toh crash na ho
+    const { data: existingUser, error: findError } = await supabase
+      .from('users')
+      .select('*')
+      .eq('uid', uid)
+      .maybeSingle(); 
 
     if (existingUser) {
       return res.status(200).json({ success: true, message: existingUser.username });
@@ -48,11 +54,12 @@ app.post('/api/register', async (req, res) => {
     // --- REFERRAL LOGIC ---
     if (referralCode && referralCode.trim() !== "") {
       try {
+        // 🛑 CHANGE: Yahan bhi .maybeSingle() lagaya
         const { data: referrer } = await supabase
           .from('users')
           .select('*')
           .ilike('username', referralCode.trim()) 
-          .single();
+          .maybeSingle();
 
         if (referrer) {
           // Sirf Referral Count badhaya (Energy Reset nahi ki) ✅
@@ -66,22 +73,25 @@ app.post('/api/register', async (req, res) => {
           console.log(`✅ Referral: ${username} -> ${referralCode}`);
         }
       } catch (refErr) {
-        console.error("Referral Error:", refErr.message);
+        console.error("Referral Error (Ignored):", refErr.message);
       }
     }
 
     // --- NEW USER INSERT ---
+    // Phone empty string ko null banana zaroori hai
+    const finalPhone = phone && phone.trim() !== "" ? phone : null;
+
     const { error: insertError } = await supabase
       .from('users')
       .insert([{ 
         uid: uid, 
         email: email, 
         username: username,
-        phone: phone || null,  
+        phone: finalPhone,  
         balance: importedBalance || 1000, 
         referral_count: importedReferralCount || 0,
         today_taps: 0,
-        last_active_date: getTodayDateIST() // 👈 INDIA DATE USE KIYA
+        last_active_date: getTodayDateIST() // 👈 INDIA DATE
       }]);
 
     if (insertError) throw insertError;
@@ -98,7 +108,8 @@ app.post('/api/register', async (req, res) => {
 app.post('/api/claim', async (req, res) => {
   const { uid, amount } = req.body; 
   try {
-    const { data: user } = await supabase.from('users').select('balance').eq('uid', uid).single();
+    const { data: user } = await supabase.from('users').select('balance').eq('uid', uid).maybeSingle();
+    
     if (!user) return res.status(404).json({ success: false });
 
     const newBalance = (user.balance || 0) + (amount || 1);
@@ -114,12 +125,15 @@ app.post('/api/claim', async (req, res) => {
 app.post('/api/mining-stats', async (req, res) => {
   const { uid } = req.body;
   try {
-    const { data: user, error } = await supabase.from('users').select('*').eq('uid', uid).single();
+    const { data: user, error } = await supabase.from('users').select('*').eq('uid', uid).maybeSingle();
+    
     if (error) throw error;
+    if (!user) return res.status(404).json({ success: false, message: "User not found" });
 
     // --- 📅 DAILY RESET CHECK (INDIA TIME) ---
     const todayDate = getTodayDateIST(); // 👈 India ki date nikali
-    
+    let currentTaps = user.today_taps;
+
     // Agar DB ki date alag hai, toh Reset karo
     if (user.last_active_date !== todayDate) {
       console.log(`🇮🇳 New Day for ${user.username}! Resetting taps.`);
@@ -129,7 +143,7 @@ app.post('/api/mining-stats', async (req, res) => {
         .update({ today_taps: 0, last_active_date: todayDate })
         .eq('uid', uid);
 
-      user.today_taps = 0; // Turant response ke liye 0 set kiya
+      currentTaps = 0; // Turant response ke liye 0 set kiya
     }
 
     // --- ⚡ MAX LIMIT CALCULATION ---
@@ -137,7 +151,6 @@ app.post('/api/mining-stats', async (req, res) => {
     const referralBonus = (user.referral_count || 0) * 500;
     
     // Yahan sirf LIMIT badh rahi hai, 'today_taps' (kharch) wahi hai.
-    // Isliye Referral karne par 41,500 nahi milega, sirf Capacity badhegi. ✅
     const finalMaxTaps = baseLimit + referralBonus; 
 
     // Global Stats
@@ -147,7 +160,7 @@ app.post('/api/mining-stats', async (req, res) => {
     res.status(200).json({
       success: true,
       totalNotes: user.balance,
-      currentTaps: user.today_taps,
+      currentTaps: currentTaps,
       maxTaps: finalMaxTaps,
       streak: 1, 
       referralCount: user.referral_count,
@@ -160,19 +173,4 @@ app.post('/api/mining-stats', async (req, res) => {
   }
 });
 
-// 6. SYNC TAPS
-app.post('/api/sync-taps', async (req, res) => {
-  const { uid, taps } = req.body;
-  try {
-    // Sirf 'today_taps' update kar rahe hain, Date change nahi kar rahe.
-    // Isse reset logic safe rahega.
-    await supabase.from('users').update({ today_taps: taps }).eq('uid', uid);
-    res.status(200).json({ success: true });
-  } catch (err) {
-    res.status(500).json({ success: false });
-  }
-});
-
-app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on port ${PORT}`);
-});
+// 6.
