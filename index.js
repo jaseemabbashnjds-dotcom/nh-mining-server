@@ -5,7 +5,7 @@ require('dotenv').config();
 
 const app = express();
 
-// ✅ RAILWAY CONFIG
+// ✅ RAILWAY CONFIG (Port Handling)
 const PORT = process.env.PORT || 8080;
 
 app.use(express.json()); 
@@ -16,12 +16,12 @@ const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_KEY;
 
 if (!supabaseUrl || !supabaseKey) {
-    console.error("🚨 ERROR: SUPABASE VARS MISSING!");
+    console.error("🚨 ERROR: SUPABASE VARS MISSING! Railway Variables check karo.");
 }
 
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// 🔥 1. SPECIAL FUNCTION: INDIA DATE (IST) 🔥
+// 🔥 SPECIAL FUNCTION: INDIA DATE (IST) 🔥
 // Ye function hamesha India ki "Aaj ki Tareekh" dega (YYYY-MM-DD)
 const getTodayDateIST = () => {
     const now = new Date();
@@ -31,16 +31,15 @@ const getTodayDateIST = () => {
     return istTime.toISOString().split('T')[0]; 
 };
 
-// 2. HOME
+// 1. HOME ROUTE
 app.get('/', (req, res) => res.send('NH Mining Server: Live & IST Synced 🇮🇳'));
 
-// 3. REGISTER / LOGIN (✅ CRASH FIXED HERE)
+// 2. REGISTER / LOGIN (✅ Safe Mode - No Crash)
 app.post('/api/register', async (req, res) => {
   const { uid, email, username, phone, importedBalance, importedReferralCount, referralCode } = req.body;
 
   try {
-    // 🛑 CHANGE: .single() ki jagah .maybeSingle() use kiya
-    // Taaki agar user na mile toh crash na ho
+    // 🛑 FIX: .maybeSingle() use kiya taaki user na milne par crash na ho
     const { data: existingUser, error: findError } = await supabase
       .from('users')
       .select('*')
@@ -54,15 +53,13 @@ app.post('/api/register', async (req, res) => {
     // --- REFERRAL LOGIC ---
     if (referralCode && referralCode.trim() !== "") {
       try {
-        // 🛑 CHANGE: Yahan bhi .maybeSingle() lagaya
         const { data: referrer } = await supabase
           .from('users')
           .select('*')
           .ilike('username', referralCode.trim()) 
-          .maybeSingle();
+          .maybeSingle(); // Yahan bhi crash fix kiya
 
         if (referrer) {
-          // Sirf Referral Count badhaya (Energy Reset nahi ki) ✅
           const newCount = (referrer.referral_count || 0) + 1;
           
           await supabase
@@ -78,7 +75,6 @@ app.post('/api/register', async (req, res) => {
     }
 
     // --- NEW USER INSERT ---
-    // Phone empty string ko null banana zaroori hai
     const finalPhone = phone && phone.trim() !== "" ? phone : null;
 
     const { error: insertError } = await supabase
@@ -104,7 +100,7 @@ app.post('/api/register', async (req, res) => {
   }
 });
 
-// 4. CLAIM / MINING (+1)
+// 3. CLAIM / MINING (+1 Logic)
 app.post('/api/claim', async (req, res) => {
   const { uid, amount } = req.body; 
   try {
@@ -121,7 +117,7 @@ app.post('/api/claim', async (req, res) => {
   }
 });
 
-// 5. MINING STATS (🔥 RESET LOGIC FIXED 🔥)
+// 4. MINING STATS (🔥 RESET LOGIC FIXED 🔥)
 app.post('/api/mining-stats', async (req, res) => {
   const { uid } = req.body;
   try {
@@ -131,7 +127,7 @@ app.post('/api/mining-stats', async (req, res) => {
     if (!user) return res.status(404).json({ success: false, message: "User not found" });
 
     // --- 📅 DAILY RESET CHECK (INDIA TIME) ---
-    const todayDate = getTodayDateIST(); // 👈 India ki date nikali
+    const todayDate = getTodayDateIST(); 
     let currentTaps = user.today_taps;
 
     // Agar DB ki date alag hai, toh Reset karo
@@ -143,14 +139,12 @@ app.post('/api/mining-stats', async (req, res) => {
         .update({ today_taps: 0, last_active_date: todayDate })
         .eq('uid', uid);
 
-      currentTaps = 0; // Turant response ke liye 0 set kiya
+      currentTaps = 0; // Turant response ke liye 0 bhejo
     }
 
     // --- ⚡ MAX LIMIT CALCULATION ---
     const baseLimit = 5000;
     const referralBonus = (user.referral_count || 0) * 500;
-    
-    // Yahan sirf LIMIT badh rahi hai, 'today_taps' (kharch) wahi hai.
     const finalMaxTaps = baseLimit + referralBonus; 
 
     // Global Stats
@@ -173,4 +167,20 @@ app.post('/api/mining-stats', async (req, res) => {
   }
 });
 
-// 6.
+// 5. SYNC TAPS (Jo tera cut gaya tha)
+app.post('/api/sync-taps', async (req, res) => {
+  const { uid, taps } = req.body;
+  try {
+    // Sirf taps update karenge, date nahi (taaki reset logic na bigde)
+    await supabase.from('users').update({ today_taps: taps }).eq('uid', uid);
+    res.status(200).json({ success: true });
+  } catch (err) {
+    console.error("Sync Error:", err.message);
+    res.status(500).json({ success: false });
+  }
+});
+
+// ✅ SERVER START (Zaroori hai Railway ke liye)
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`Server running on port ${PORT}`);
+});
