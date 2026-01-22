@@ -4,8 +4,6 @@ const cors = require('cors');
 require('dotenv').config();
 
 const app = express();
-
-// ✅ RAILWAY CONFIG (Port Handling)
 const PORT = process.env.PORT || 8080;
 
 app.use(express.json()); 
@@ -16,66 +14,74 @@ const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_KEY;
 
 if (!supabaseUrl || !supabaseKey) {
-    console.error("🚨 ERROR: SUPABASE VARS MISSING! Railway Variables check karo.");
+    console.error("🚨 ERROR: SUPABASE VARS MISSING!");
 }
 
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// 🔥 SPECIAL FUNCTION: INDIA DATE (IST) 🔥
-// Ye function hamesha India ki "Aaj ki Tareekh" dega (YYYY-MM-DD)
+// ✅ Helper: India Date Function (IST)
 const getTodayDateIST = () => {
     const now = new Date();
-    // UTC se 5 ghante 30 min aage (India Time)
+    // UTC se 5.5 hours add karke India time nikalo
     const istOffset = 5.5 * 60 * 60 * 1000; 
     const istTime = new Date(now.getTime() + istOffset);
-    return istTime.toISOString().split('T')[0]; 
+    return istTime.toISOString().split('T')[0]; // Returns 'YYYY-MM-DD'
 };
 
-// 1. HOME ROUTE
 app.get('/', (req, res) => res.send('NH Mining Server: Live & IST Synced 🇮🇳'));
 
-// 2. REGISTER / LOGIN (✅ Safe Mode - No Crash)
+// 1. REGISTER API
 app.post('/api/register', async (req, res) => {
   const { uid, email, username, phone, importedBalance, importedReferralCount, referralCode } = req.body;
 
+  console.log(`📝 Register Request: ${username} (${uid})`); // Log start
+
   try {
-    // 🛑 FIX: .maybeSingle() use kiya taaki user na milne par crash na ho
+    // A. Check if user already exists
     const { data: existingUser, error: findError } = await supabase
       .from('users')
       .select('*')
       .eq('uid', uid)
       .maybeSingle(); 
 
+    if (findError) {
+        console.error("❌ Find User Error:", findError.message);
+        throw findError;
+    }
+
     if (existingUser) {
+      console.log("✅ User already exists. Logging in.");
       return res.status(200).json({ success: true, message: existingUser.username });
     }
 
-    // --- REFERRAL LOGIC ---
+    // B. Referral Logic (Safe Mode)
     if (referralCode && referralCode.trim() !== "") {
       try {
         const { data: referrer } = await supabase
           .from('users')
           .select('*')
           .ilike('username', referralCode.trim()) 
-          .maybeSingle(); // Yahan bhi crash fix kiya
+          .maybeSingle();
 
         if (referrer) {
           const newCount = (referrer.referral_count || 0) + 1;
-          
           await supabase
             .from('users')
             .update({ referral_count: newCount })
             .eq('uid', referrer.uid);
-            
-          console.log(`✅ Referral: ${username} -> ${referralCode}`);
+          console.log(`🔗 Referral Applied: ${referralCode}`);
         }
-      } catch (refErr) {
-        console.error("Referral Error (Ignored):", refErr.message);
+      } catch (e) {
+        console.log("⚠️ Referral Error (Skipped):", e.message);
       }
     }
 
-    // --- NEW USER INSERT ---
-    const finalPhone = phone && phone.trim() !== "" ? phone : null;
+    // C. New User Insert
+    // Ensure Phone is either a valid string or NULL (Empty string fails in some DBs)
+    const finalPhone = phone && phone.trim().length > 0 ? phone : null;
+    
+    // IST Date Generate Karo
+    const todayDate = getTodayDateIST(); 
 
     const { error: insertError } = await supabase
       .from('users')
@@ -87,62 +93,62 @@ app.post('/api/register', async (req, res) => {
         balance: importedBalance || 1000, 
         referral_count: importedReferralCount || 0,
         today_taps: 0,
-        last_active_date: getTodayDateIST() // 👈 INDIA DATE
+        last_active_date: todayDate // ✅ WAPAS DAAL DIYA (Screenshot verified)
       }]);
 
-    if (insertError) throw insertError;
+    if (insertError) {
+        // 🔥 Yahan Asli Error Print Hoga
+        console.error("❌ INSERT ERROR:", insertError.message, insertError.details);
+        throw insertError;
+    }
 
+    console.log("🎉 New User Registered Successfully!");
     res.status(200).json({ success: true, message: username });
 
   } catch (err) {
-    console.error("Register Error:", err.message);
-    res.status(500).json({ success: false, message: err.message });
+    console.error("💥 SERVER CRASH ERROR:", err.message);
+    res.status(500).json({ success: false, message: "Server Error: " + err.message });
   }
 });
 
-// 3. CLAIM / MINING (+1 Logic)
+// 2. CLAIM API
 app.post('/api/claim', async (req, res) => {
   const { uid, amount } = req.body; 
   try {
     const { data: user } = await supabase.from('users').select('balance').eq('uid', uid).maybeSingle();
-    
     if (!user) return res.status(404).json({ success: false });
 
     const newBalance = (user.balance || 0) + (amount || 1);
     await supabase.from('users').update({ balance: newBalance }).eq('uid', uid);
-    
     res.status(200).json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false });
   }
 });
 
-// 4. MINING STATS (🔥 RESET LOGIC FIXED 🔥)
+// 3. STATS API
 app.post('/api/mining-stats', async (req, res) => {
   const { uid } = req.body;
   try {
-    const { data: user, error } = await supabase.from('users').select('*').eq('uid', uid).maybeSingle();
+    const { data: user } = await supabase.from('users').select('*').eq('uid', uid).maybeSingle();
+    if (!user) return res.status(404).json({ success: false });
+
+    // --- 📅 DAILY RESET CHECK (IST) ---
+    const todayDate = getTodayDateIST();
     
-    if (error) throw error;
-    if (!user) return res.status(404).json({ success: false, message: "User not found" });
-
-    // --- 📅 DAILY RESET CHECK (INDIA TIME) ---
-    const todayDate = getTodayDateIST(); 
-    let currentTaps = user.today_taps;
-
-    // Agar DB ki date alag hai, toh Reset karo
+    // Agar Date match nahi karti (User purane din se aaya hai)
     if (user.last_active_date !== todayDate) {
-      console.log(`🇮🇳 New Day for ${user.username}! Resetting taps.`);
+      console.log(`🔄 Resetting Taps for ${user.username} (New Day)`);
       
       await supabase
         .from('users')
         .update({ today_taps: 0, last_active_date: todayDate })
         .eq('uid', uid);
 
-      currentTaps = 0; // Turant response ke liye 0 bhejo
+      user.today_taps = 0; 
     }
 
-    // --- ⚡ MAX LIMIT CALCULATION ---
+    // Limit Calculation
     const baseLimit = 5000;
     const referralBonus = (user.referral_count || 0) * 500;
     const finalMaxTaps = baseLimit + referralBonus; 
@@ -154,7 +160,7 @@ app.post('/api/mining-stats', async (req, res) => {
     res.status(200).json({
       success: true,
       totalNotes: user.balance,
-      currentTaps: currentTaps,
+      currentTaps: user.today_taps || 0,
       maxTaps: finalMaxTaps,
       streak: 1, 
       referralCount: user.referral_count,
@@ -163,24 +169,21 @@ app.post('/api/mining-stats', async (req, res) => {
 
   } catch (err) {
     console.error("Stats Error:", err.message);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// 5. SYNC TAPS (Jo tera cut gaya tha)
-app.post('/api/sync-taps', async (req, res) => {
-  const { uid, taps } = req.body;
-  try {
-    // Sirf taps update karenge, date nahi (taaki reset logic na bigde)
-    await supabase.from('users').update({ today_taps: taps }).eq('uid', uid);
-    res.status(200).json({ success: true });
-  } catch (err) {
-    console.error("Sync Error:", err.message);
     res.status(500).json({ success: false });
   }
 });
 
-// ✅ SERVER START (Zaroori hai Railway ke liye)
+// 4. SYNC API
+app.post('/api/sync-taps', async (req, res) => {
+  const { uid, taps } = req.body;
+  try {
+    await supabase.from('users').update({ today_taps: taps }).eq('uid', uid);
+    res.status(200).json({ success: true });
+  } catch (err) {
+    res.status(500).json({ success: false });
+  }
+});
+
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on port ${PORT}`);
 });
