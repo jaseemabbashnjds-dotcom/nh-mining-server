@@ -3,104 +3,89 @@ const { createClient } = require('@supabase/supabase-js');
 const cors = require('cors');
 require('dotenv').config();
 
-// 🔥 CRASH HANDLER: Server ko marne nahi dega
+// 🔥 CRASH HANDLER: Global error catching taaki server band na ho
 process.on('uncaughtException', (err) => {
-  console.error('💥 Error aaya par Server Zinda hai:', err);
+  console.error('💥 Critical Error:', err);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('💥 Unhandled Rejection at:', promise, 'reason:', reason);
 });
 
 const app = express();
+
+// Railway dynamics port handle karne ke liye
 const PORT = process.env.PORT || 8080;
 
 app.use(express.json()); 
 app.use(cors());
 
-// Supabase Connection
+// Supabase Connection setup with validation
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_KEY;
 
+let supabase;
+
 if (!supabaseUrl || !supabaseKey) {
-    console.error("🚨 ERROR: Supabase Variables Missing!");
+    console.error("🚨 ERROR: Supabase Variables Missing! Dashboard check karein.");
+} else {
+    try {
+        supabase = createClient(supabaseUrl, supabaseKey);
+        console.log("⚡ Supabase Client Initialized");
+    } catch (e) {
+        console.error("🚨 Supabase Init Failed:", e.message);
+    }
 }
 
-const supabase = createClient(supabaseUrl, supabaseKey);
-
-// 🇮🇳 INDIA TIME HELPER (Reset ke liye)
+// 🇮🇳 INDIA TIME HELPER
 const getTodayDateIST = () => {
     const now = new Date();
-    const istOffset = 5.5 * 60 * 60 * 1000; 
-    const istTime = new Date(now.getTime() + istOffset);
+    // Indian Standard Time (UTC +5:30)
+    const istTime = new Date(now.getTime() + (5.5 * 60 * 60 * 1000));
     return istTime.toISOString().split('T')[0]; 
 };
 
-app.get('/', (req, res) => res.send('NH Mining Server: Live & Ready 🟢'));
+// Health Check Route (Isse Railway ko pata chalta hai ki server zinda hai)
+app.get('/', (req, res) => res.status(200).send('NH Mining Server: Live & Ready 🟢'));
 
-// ✅ REGISTER API (Minimum 1000 Balance Logic)
+// ✅ REGISTER API
 app.post('/api/register', async (req, res) => {
+  if (!supabase) return res.status(500).json({ success: false, message: "Database not connected" });
+  
   const { uid, email, username, phone, importedBalance, importedReferralCount, referralCode } = req.body;
 
   try {
-    // 🔍 STEP 1: CHECK EXISTING USER
-    const { data: existingUser } = await supabase
+    const { data: existingUser, error: fetchError } = await supabase
       .from('users')
       .select('*')
       .eq('uid', uid)
       .maybeSingle(); 
 
-    // 👇 AGAR BANDA PEHLE SE HAI (Purana User) 👇
-    if (existingUser) {
-      console.log(`👤 Old User Login: ${existingUser.username} | Current Balance: ${existingUser.balance}`);
-      
-      // TERA LOGIC: Agar balance 1000 se kam hai, toh 1000 karo.
-      // Agar 1000 ya usse zyada hai, toh waisa hi rehne do.
-      if ((existingUser.balance || 0) < 1000) {
-          console.log("⚠️ Balance kam tha (<1000), Top-up kar rahe hain...");
-          
-          await supabase
-            .from('users')
-            .update({ balance: 1000 })
-            .eq('uid', uid);
-            
-          console.log("✅ Balance updated to 1000.");
-      } else {
-          console.log("✅ Balance Sahi hai (>1000), No Change.");
-      }
+    if (fetchError) throw fetchError;
 
+    if (existingUser) {
+      if ((existingUser.balance || 0) < 1000) {
+          await supabase.from('users').update({ balance: 1000 }).eq('uid', uid);
+      }
       return res.status(200).json({ success: true, message: existingUser.username });
     }
 
-    // ===================================================
-    // 🚧 ISKE NEECHE SIRF NAYE BANDO KE LIYE HAI 🚧
-    // ===================================================
-
-    // STEP 2: Referral Logic (New User Only)
+    // Referral Logic
     if (referralCode && referralCode.trim() !== "") {
-      try {
-        const { data: referrer } = await supabase.from('users').select('*').ilike('username', referralCode).maybeSingle();
-        if (referrer) {
-           await supabase.from('users').update({ referral_count: (referrer.referral_count || 0) + 1 }).eq('uid', referrer.uid);
-        }
-      } catch (e) { /* Ignore */ }
+      const { data: referrer } = await supabase.from('users').select('*').ilike('username', referralCode).maybeSingle();
+      if (referrer) {
+         await supabase.from('users').update({ referral_count: (referrer.referral_count || 0) + 1 }).eq('uid', referrer.uid);
+      }
     }
 
-    // STEP 3: Naya Account Insert (1000 Bonus Fixed)
     const todayDate = getTodayDateIST();
-    
-    // Agar Firebase se kuch aaya hai to theek, warna seedha 1000
-    let startingBalance = 1000;
-    if (importedBalance && Number(importedBalance) > 1000) {
-        startingBalance = Number(importedBalance);
-    }
+    let startingBalance = Math.max(1000, Number(importedBalance) || 0);
 
     const { error: insertError } = await supabase
       .from('users')
       .insert([{ 
-        uid: uid, 
-        email: email, 
-        username: username,
-        phone: phone || null,
-        
-        balance: startingBalance, // ✅ Guaranteed 1000 Check
-        
+        uid, email, username, phone: phone || null,
+        balance: startingBalance,
         referral_count: importedReferralCount || 0,
         today_taps: 0,
         last_active_date: todayDate 
@@ -108,12 +93,10 @@ app.post('/api/register', async (req, res) => {
 
     if (insertError) throw insertError;
 
-    console.log(`🎉 New User Registered: ${username} with 1000 Notes`);
     res.status(200).json({ success: true, message: username });
-
   } catch (err) {
     console.error("Register Error:", err.message);
-    res.status(500).json({ success: false, message: err.message });
+    res.status(500).json({ success: false, message: "Registration Failed" });
   }
 });
 
@@ -131,7 +114,7 @@ app.post('/api/claim', async (req, res) => {
   }
 });
 
-// ✅ STATS API (With India Time Reset)
+// ✅ STATS API
 app.post('/api/mining-stats', async (req, res) => {
   const { uid } = req.body;
   try {
@@ -140,7 +123,6 @@ app.post('/api/mining-stats', async (req, res) => {
 
     const todayDate = getTodayDateIST();
     
-    // Auto Reset Logic (Sirf Taps Reset honge, Balance nahi)
     if (user.last_active_date !== todayDate) {
       await supabase.from('users').update({ today_taps: 0, last_active_date: todayDate }).eq('uid', uid);
       user.today_taps = 0;
@@ -156,7 +138,6 @@ app.post('/api/mining-stats', async (req, res) => {
       maxTaps: baseLimit + referralBonus,
       referralCount: user.referral_count,
     });
-
   } catch (err) {
     res.status(500).json({ success: false });
   }
@@ -173,6 +154,7 @@ app.post('/api/sync-taps', async (req, res) => {
   }
 });
 
+// Start Server
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on port ${PORT}`);
+    console.log(`🚀 NH Mining Server active on port ${PORT}`);
 });
