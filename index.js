@@ -3,7 +3,7 @@ const { createClient } = require('@supabase/supabase-js');
 const cors = require('cors');
 require('dotenv').config();
 
-// 🔥 CRASH HANDLER: Global error catching taaki server band na ho
+// 🔥 CRASH HANDLER: Server ko crash hone se bachata hai
 process.on('uncaughtException', (err) => {
   console.error('💥 Critical Error:', err);
 });
@@ -14,43 +14,45 @@ process.on('unhandledRejection', (reason, promise) => {
 
 const app = express();
 
-// Railway dynamics port handle karne ke liye
+// RAILWAY PORT FIX: Railway dynamic port assign karta hai
 const PORT = process.env.PORT || 8080;
 
 app.use(express.json()); 
 app.use(cors());
 
-// Supabase Connection setup with validation
+// Supabase Connection
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_KEY;
 
 let supabase;
 
-if (!supabaseUrl || !supabaseKey) {
-    console.error("🚨 ERROR: Supabase Variables Missing! Dashboard check karein.");
-} else {
+// Supabase initialization with check
+if (supabaseUrl && supabaseKey) {
     try {
         supabase = createClient(supabaseUrl, supabaseKey);
-        console.log("⚡ Supabase Client Initialized");
+        console.log("⚡ Supabase Client Initialized Successfully");
     } catch (e) {
-        console.error("🚨 Supabase Init Failed:", e.message);
+        console.error("🚨 Supabase Connection Failed:", e.message);
     }
+} else {
+    console.error("🚨 ERROR: Supabase Environment Variables are missing!");
 }
 
 // 🇮🇳 INDIA TIME HELPER
 const getTodayDateIST = () => {
     const now = new Date();
-    // Indian Standard Time (UTC +5:30)
     const istTime = new Date(now.getTime() + (5.5 * 60 * 60 * 1000));
     return istTime.toISOString().split('T')[0]; 
 };
 
-// Health Check Route (Isse Railway ko pata chalta hai ki server zinda hai)
-app.get('/', (req, res) => res.status(200).send('NH Mining Server: Live & Ready 🟢'));
+// ✅ HEALTH CHECK: Railway isi route ko check karke server zinda rakhta hai
+app.get('/', (req, res) => {
+    res.status(200).send('NH Mining Server: Online 🟢');
+});
 
 // ✅ REGISTER API
 app.post('/api/register', async (req, res) => {
-  if (!supabase) return res.status(500).json({ success: false, message: "Database not connected" });
+  if (!supabase) return res.status(500).json({ success: false, message: "DB Connection Error" });
   
   const { uid, email, username, phone, importedBalance, importedReferralCount, referralCode } = req.body;
 
@@ -72,7 +74,7 @@ app.post('/api/register', async (req, res) => {
 
     // Referral Logic
     if (referralCode && referralCode.trim() !== "") {
-      const { data: referrer } = await supabase.from('users').select('*').ilike('username', referralCode).maybeSingle();
+      const { data: referrer } = await supabase.from('users').select('*').ilike('username', referralCode.trim()).maybeSingle();
       if (referrer) {
          await supabase.from('users').update({ referral_count: (referrer.referral_count || 0) + 1 }).eq('uid', referrer.uid);
       }
@@ -100,42 +102,25 @@ app.post('/api/register', async (req, res) => {
   }
 });
 
-// ✅ CLAIM API
-app.post('/api/claim', async (req, res) => {
-  const { uid, amount } = req.body; 
-  try {
-    const { data: user } = await supabase.from('users').select('balance').eq('uid', uid).maybeSingle();
-    if (!user) return res.status(404).json({ success: false });
-
-    await supabase.from('users').update({ balance: (user.balance || 0) + (amount || 1) }).eq('uid', uid);
-    res.status(200).json({ success: true });
-  } catch (err) {
-    res.status(500).json({ success: false });
-  }
-});
-
 // ✅ STATS API
 app.post('/api/mining-stats', async (req, res) => {
+  if (!supabase) return res.status(500).json({ success: false });
   const { uid } = req.body;
   try {
     const { data: user } = await supabase.from('users').select('*').eq('uid', uid).maybeSingle();
     if (!user) return res.status(404).json({ success: false });
 
     const todayDate = getTodayDateIST();
-    
     if (user.last_active_date !== todayDate) {
       await supabase.from('users').update({ today_taps: 0, last_active_date: todayDate }).eq('uid', uid);
       user.today_taps = 0;
     }
 
-    const baseLimit = 5000;
-    const referralBonus = (user.referral_count || 0) * 500;
-    
     res.status(200).json({
       success: true,
       totalNotes: user.balance,
       currentTaps: user.today_taps,
-      maxTaps: baseLimit + referralBonus,
+      maxTaps: 5000 + ((user.referral_count || 0) * 500),
       referralCount: user.referral_count,
     });
   } catch (err) {
@@ -143,18 +128,29 @@ app.post('/api/mining-stats', async (req, res) => {
   }
 });
 
-// ✅ SYNC API
+// ✅ CLAIM & SYNC APIs (Combined for performance)
 app.post('/api/sync-taps', async (req, res) => {
+  if (!supabase) return res.status(500).json({ success: false });
   const { uid, taps } = req.body;
   try {
     await supabase.from('users').update({ today_taps: taps }).eq('uid', uid);
     res.status(200).json({ success: true });
-  } catch (err) {
-    res.status(500).json({ success: false });
-  }
+  } catch (err) { res.status(500).json({ success: false }); }
 });
 
-// Start Server
+app.post('/api/claim', async (req, res) => {
+  if (!supabase) return res.status(500).json({ success: false });
+  const { uid, amount } = req.body; 
+  try {
+    const { data: user } = await supabase.from('users').select('balance').eq('uid', uid).maybeSingle();
+    if (user) {
+        await supabase.from('users').update({ balance: (user.balance || 0) + (amount || 0) }).eq('uid', uid);
+        res.status(200).json({ success: true });
+    } else { res.status(404).json({ success: false }); }
+  } catch (err) { res.status(500).json({ success: false }); }
+});
+
+// SERVER LISTEN: 0.0.0.0 is mandatory for Railway
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 NH Mining Server active on port ${PORT}`);
 });
