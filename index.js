@@ -9,32 +9,32 @@ process.on('uncaughtException', (err) => {
 });
 
 process.on('unhandledRejection', (reason, promise) => {
-  console.error('💥 Unhandled Rejection:', reason);
+  console.error('💥 Unhandled Rejection at:', promise, 'reason:', reason);
 });
 
 const app = express();
 
-// RAILWAY PORT: Railway dynamic port assign karta hai
+// RAILWAY PORT FIX: Railway dynamic port assign karta hai
 const PORT = process.env.PORT || 8080;
 
 app.use(express.json()); 
 app.use(cors());
 
-// Supabase Connection
+// Supabase Connection setup with validation
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_KEY;
 
 let supabase;
 
-if (supabaseUrl && supabaseKey) {
+if (!supabaseUrl || !supabaseKey) {
+    console.error("🚨 ERROR: Supabase Variables Missing! Dashboard check karein.");
+} else {
     try {
         supabase = createClient(supabaseUrl, supabaseKey);
         console.log("⚡ Supabase Client Initialized Successfully");
     } catch (e) {
-        console.error("🚨 Supabase Connection Failed:", e.message);
+        console.error("🚨 Supabase Init Failed:", e.message);
     }
-} else {
-    console.error("🚨 ERROR: Supabase Variables are missing!");
 }
 
 // 🇮🇳 INDIA TIME HELPER
@@ -46,12 +46,12 @@ const getTodayDateIST = () => {
 
 // ✅ HEALTH CHECK: Railway isi route ko check karke server zinda rakhta hai
 app.get('/', (req, res) => {
-    res.status(200).send('OK'); // Simple "OK" Railway healthcheck ke liye best hai
+    res.status(200).send('OK');
 });
 
 // ✅ REGISTER API
 app.post('/api/register', async (req, res) => {
-  if (!supabase) return res.status(500).json({ success: false, message: "DB Connection Error" });
+  if (!supabase) return res.status(500).json({ success: false, message: "DB Error" });
   
   const { uid, email, username, phone, importedBalance, importedReferralCount, referralCode } = req.body;
 
@@ -93,11 +93,9 @@ app.post('/api/register', async (req, res) => {
       }]);
 
     if (insertError) throw insertError;
-
     res.status(200).json({ success: true, message: username });
   } catch (err) {
-    console.error("Register Error:", err.message);
-    res.status(500).json({ success: false, message: "Registration Failed" });
+    res.status(500).json({ success: false, message: err.message });
   }
 });
 
@@ -106,8 +104,8 @@ app.post('/api/mining-stats', async (req, res) => {
   if (!supabase) return res.status(500).json({ success: false });
   const { uid } = req.body;
   try {
-    const { data: user } = await supabase.from('users').select('*').eq('uid', uid).maybeSingle();
-    if (!user) return res.status(404).json({ success: false });
+    const { data: user, error } = await supabase.from('users').select('*').eq('uid', uid).maybeSingle();
+    if (error || !user) return res.status(404).json({ success: false });
 
     const todayDate = getTodayDateIST();
     if (user.last_active_date !== todayDate) {
@@ -129,7 +127,6 @@ app.post('/api/mining-stats', async (req, res) => {
 
 // ✅ SYNC & CLAIM
 app.post('/api/sync-taps', async (req, res) => {
-  if (!supabase) return res.status(500).json({ success: false });
   const { uid, taps } = req.body;
   try {
     await supabase.from('users').update({ today_taps: taps }).eq('uid', uid);
@@ -138,7 +135,6 @@ app.post('/api/sync-taps', async (req, res) => {
 });
 
 app.post('/api/claim', async (req, res) => {
-  if (!supabase) return res.status(500).json({ success: false });
   const { uid, amount } = req.body; 
   try {
     const { data: user } = await supabase.from('users').select('balance').eq('uid', uid).maybeSingle();
@@ -151,19 +147,16 @@ app.post('/api/claim', async (req, res) => {
 
 // --- SERVER STARTUP ---
 const server = app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 NH Mining Server active on port ${PORT}`);
+    console.log(`🚀 Server active on port ${PORT}`);
 });
 
-// --- RAILWAY SIGTERM FIX ---
-// Jab Railway container stop karne ka signal bhejta hai, toh server ko clean exit karna chahiye
+// --- RAILWAY SIGTERM & TIMEOUT FIX ---
+server.keepAliveTimeout = 120000;
+server.headersTimeout = 125000;
+
 process.on('SIGTERM', () => {
-  console.log('⚠️ SIGTERM signal received: Closing HTTP server...');
+  console.log('⚠️ SIGTERM received. Closing server...');
   server.close(() => {
-    console.log('🛑 HTTP server closed.');
     process.exit(0);
   });
 });
-
-// Railway connection timeout fix
-server.keepAliveTimeout = 120000;
-server.headersTimeout = 125000;
