@@ -3,18 +3,18 @@ const { createClient } = require('@supabase/supabase-js');
 const cors = require('cors');
 require('dotenv').config();
 
-// 🔥 CRASH HANDLER: Server ko crash hone se bachata hai
+// 🔥 CRASH HANDLER: Global error catching taaki server band na ho
 process.on('uncaughtException', (err) => {
   console.error('💥 Critical Error:', err);
 });
 
 process.on('unhandledRejection', (reason, promise) => {
-  console.error('💥 Unhandled Rejection at:', promise, 'reason:', reason);
+  console.error('💥 Unhandled Rejection:', reason);
 });
 
 const app = express();
 
-// RAILWAY PORT FIX: Railway dynamic port assign karta hai
+// RAILWAY PORT: Railway dynamic port assign karta hai
 const PORT = process.env.PORT || 8080;
 
 app.use(express.json()); 
@@ -26,7 +26,6 @@ const supabaseKey = process.env.SUPABASE_KEY;
 
 let supabase;
 
-// Supabase initialization with check
 if (supabaseUrl && supabaseKey) {
     try {
         supabase = createClient(supabaseUrl, supabaseKey);
@@ -35,7 +34,7 @@ if (supabaseUrl && supabaseKey) {
         console.error("🚨 Supabase Connection Failed:", e.message);
     }
 } else {
-    console.error("🚨 ERROR: Supabase Environment Variables are missing!");
+    console.error("🚨 ERROR: Supabase Variables are missing!");
 }
 
 // 🇮🇳 INDIA TIME HELPER
@@ -47,7 +46,7 @@ const getTodayDateIST = () => {
 
 // ✅ HEALTH CHECK: Railway isi route ko check karke server zinda rakhta hai
 app.get('/', (req, res) => {
-    res.status(200).send('NH Mining Server: Online 🟢');
+    res.status(200).send('OK'); // Simple "OK" Railway healthcheck ke liye best hai
 });
 
 // ✅ REGISTER API
@@ -128,7 +127,7 @@ app.post('/api/mining-stats', async (req, res) => {
   }
 });
 
-// ✅ CLAIM & SYNC APIs (Combined for performance)
+// ✅ SYNC & CLAIM
 app.post('/api/sync-taps', async (req, res) => {
   if (!supabase) return res.status(500).json({ success: false });
   const { uid, taps } = req.body;
@@ -150,7 +149,11 @@ app.post('/api/claim', async (req, res) => {
   } catch (err) { res.status(500).json({ success: false }); }
 });
 
-// SERVER LISTEN: 0.0.0.0 is mandatory for Railway
-app.listen(PORT, '0.0.0.0', () => {
+// --- SERVER STARTUP ---
+const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 NH Mining Server active on port ${PORT}`);
 });
+
+// Railway connection timeout fix
+server.keepAliveTimeout = 120000;
+server.headersTimeout = 125000;
