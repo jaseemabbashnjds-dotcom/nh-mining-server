@@ -154,6 +154,16 @@ const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 NH Mining Server active on port ${PORT}`);
 });
 
+// --- RAILWAY SIGTERM FIX ---
+// Jab Railway container stop karne ka signal bhejta hai, toh server ko clean exit karna chahiye
+process.on('SIGTERM', () => {
+  console.log('⚠️ SIGTERM signal received: Closing HTTP server...');
+  server.close(() => {
+    console.log('🛑 HTTP server closed.');
+    process.exit(0);
+  });
+});
+
 // Railway connection timeout fix
 server.keepAliveTimeout = 120000;
 server.headersTimeout = 125000;
